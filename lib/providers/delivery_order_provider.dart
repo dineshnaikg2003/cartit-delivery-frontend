@@ -408,7 +408,9 @@ class DeliveryOrderProvider extends ChangeNotifier {
         orElse: () => active.first,
       );
       LiveTrackingService().setUploadCallback(updateLocation);
-      LiveTrackingService().startTracking(orderId: currentDelivering.id);
+      if (!LiveTrackingService().isTracking || LiveTrackingService().activeOrderId != currentDelivering.id) {
+        LiveTrackingService().startTracking(orderId: currentDelivering.id);
+      }
     } else {
       if (LiveTrackingService().isTracking) {
         LiveTrackingService().stopTracking();

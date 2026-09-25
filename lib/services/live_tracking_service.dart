@@ -126,6 +126,16 @@ class LiveTrackingService {
     Position position,
     Function(String reason)? onSecurityViolation,
   ) {
+    // 0. Coordinate Bounds & Null-Island check
+    if (position.latitude < -90.0 ||
+        position.latitude > 90.0 ||
+        position.longitude < -180.0 ||
+        position.longitude > 180.0 ||
+        (position.latitude.abs() < 0.0001 && position.longitude.abs() < 0.0001)) {
+      debugPrint('[LiveTrackingService] Discarded invalid coordinates: ${position.latitude}, ${position.longitude}');
+      return;
+    }
+
     // 1. Anti-Mocking / Fake GPS Check
     if (position.isMocked) {
       onSecurityViolation?.call('Mock Location / Fake GPS detected!');
@@ -138,9 +148,10 @@ class LiveTrackingService {
       return;
     }
 
-    // 3. Filter out stale timestamps (> 15 seconds old)
-    DateTime posTime = position.timestamp;
-    if (DateTime.now().difference(posTime).inSeconds.abs() > 15) {
+    // 3. Filter out stale timestamps (> 15 seconds old) using normalized UTC times
+    DateTime nowUtc = DateTime.now().toUtc();
+    DateTime posTimeUtc = position.timestamp.toUtc();
+    if (nowUtc.difference(posTimeUtc).inSeconds.abs() > 15) {
       debugPrint('[LiveTrackingService] Discarded stale position point');
       return;
     }
@@ -154,7 +165,7 @@ class LiveTrackingService {
         position.longitude,
       );
 
-      int timeDiffSec = posTime.difference(_lastValidPosition!.timestamp).inSeconds.abs();
+      int timeDiffSec = posTimeUtc.difference(_lastValidPosition!.timestamp.toUtc()).inSeconds.abs();
       if (timeDiffSec <= 0) timeDiffSec = 1;
 
       double speedKmH = (distanceMeters / 1000.0 / timeDiffSec) * 3600;
@@ -190,7 +201,7 @@ class LiveTrackingService {
     _lastUploadedLat = position.latitude;
     _lastUploadedLng = position.longitude;
 
-    // Dispatch upload to backend
+    // Dispatch upload to backend with network error resilience
     if (_uploadCallback != null) {
       _uploadCallback!(
         orderId: _activeOrderId,
@@ -201,7 +212,7 @@ class LiveTrackingService {
         heading: position.heading,
         timestamp: position.timestamp.millisecondsSinceEpoch,
       ).catchError((err) {
-        debugPrint('[LiveTrackingService] Upload error: $err');
+        debugPrint('[LiveTrackingService] Location upload network error (will retry next fix): $err');
       });
     }
   }
