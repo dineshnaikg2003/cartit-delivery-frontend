@@ -22,6 +22,11 @@ class _AllocatedOrdersScreenState extends State<AllocatedOrdersScreen>
   void initState() {
     super.initState();
     _tabController = TabController(length: 2, vsync: this);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) {
+        Provider.of<DeliveryOrderProvider>(context, listen: false).syncLiveTrackingState();
+      }
+    });
   }
 
   @override

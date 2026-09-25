@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:dio/dio.dart';
 import '../core/network/api_constants.dart';
 import '../models/delivery_order_model.dart';
+import '../services/live_tracking_service.dart';
 
 class DeliveryOrderProvider extends ChangeNotifier {
   final Dio _dio = Dio(BaseOptions(
@@ -324,6 +325,7 @@ class DeliveryOrderProvider extends ChangeNotifier {
     }
 
     _orders[index] = current.copyWith(status: nextStatus);
+    syncLiveTrackingState();
     notifyListeners();
 
     try {
@@ -348,6 +350,7 @@ class DeliveryOrderProvider extends ChangeNotifier {
         isPaid: true,
         cashToCollect: 0.0,
       );
+      syncLiveTrackingState();
       notifyListeners();
       return true;
     }
@@ -362,15 +365,54 @@ class DeliveryOrderProvider extends ChangeNotifier {
       status: DeliveryOrderStatus.cancelled,
       cancellationReason: reason,
     );
+    syncLiveTrackingState();
     notifyListeners();
   }
 
-  Future<void> updateLocation(double lat, double lng) async {
+  Future<void> updateLocation({
+    String? orderId,
+    required double latitude,
+    required double longitude,
+    double? accuracy,
+    double? speed,
+    double? heading,
+    int? timestamp,
+  }) async {
     try {
-      await _dio.patch('/delivery/location', data: {
-        'latitude': lat,
-        'longitude': lng,
-      });
+      final Map<String, dynamic> payload = {
+        'latitude': latitude,
+        'longitude': longitude,
+      };
+      if (orderId != null && orderId.isNotEmpty) {
+        final parsedId = int.tryParse(orderId);
+        if (parsedId != null) payload['orderId'] = parsedId;
+      }
+      if (accuracy != null) payload['accuracy'] = accuracy;
+      if (speed != null) payload['speed'] = speed;
+      if (heading != null) payload['heading'] = heading;
+      if (timestamp != null) payload['timestamp'] = timestamp;
+
+      await _dio.patch('/delivery/location', data: payload);
     } catch (_) {}
+  }
+
+  void syncLiveTrackingState() {
+    final active = activeOrders;
+    if (active.isNotEmpty) {
+      final currentDelivering = active.firstWhere(
+        (o) =>
+            o.status == DeliveryOrderStatus.assigned ||
+            o.status == DeliveryOrderStatus.arrivedAtStore ||
+            o.status == DeliveryOrderStatus.pickedUp ||
+            o.status == DeliveryOrderStatus.arrivedAtCustomer,
+        orElse: () => active.first,
+      );
+      LiveTrackingService().setUploadCallback(updateLocation);
+      LiveTrackingService().startTracking(orderId: currentDelivering.id);
+    } else {
+      if (LiveTrackingService().isTracking) {
+        LiveTrackingService().stopTracking();
+      }
+    }
   }
 }

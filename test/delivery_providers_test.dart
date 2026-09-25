@@ -5,6 +5,8 @@ import 'package:cartit_delivery/providers/earnings_provider.dart';
 import 'package:cartit_delivery/providers/duty_provider.dart';
 
 void main() {
+  TestWidgetsFlutterBinding.ensureInitialized();
+
   group('DeliveryOrderProvider Tests', () {
     test('Initial active orders load properly', () {
       final provider = DeliveryOrderProvider();
