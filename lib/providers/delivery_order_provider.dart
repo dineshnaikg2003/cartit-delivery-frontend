@@ -45,6 +45,16 @@ class DeliveryOrderProvider extends ChangeNotifier {
     fetchAllocatedOrders();
   }
 
+  String? activeTrackingOrderId;
+
+  void setActiveTrackingOrder(String? orderId) {
+    if (activeTrackingOrderId != orderId) {
+      activeTrackingOrderId = orderId;
+      syncLiveTrackingState();
+      notifyListeners();
+    }
+  }
+
   Future<void> fetchAllocatedOrders() async {
     _isLoading = true;
     _errorMessage = null;
@@ -66,6 +76,7 @@ class DeliveryOrderProvider extends ChangeNotifier {
       }
     } finally {
       _isLoading = false;
+      syncLiveTrackingState();
       notifyListeners();
     }
   }
@@ -324,6 +335,16 @@ class DeliveryOrderProvider extends ChangeNotifier {
         return;
     }
 
+    if (nextStatus == DeliveryOrderStatus.pickedUp ||
+        nextStatus == DeliveryOrderStatus.arrivedAtCustomer ||
+        nextStatus == DeliveryOrderStatus.arrivedAtStore) {
+      activeTrackingOrderId = orderId;
+    } else if (nextStatus == DeliveryOrderStatus.delivered || nextStatus == DeliveryOrderStatus.cancelled) {
+      if (activeTrackingOrderId == orderId) {
+        activeTrackingOrderId = null;
+      }
+    }
+
     _orders[index] = current.copyWith(status: nextStatus);
     syncLiveTrackingState();
     notifyListeners();
@@ -350,6 +371,9 @@ class DeliveryOrderProvider extends ChangeNotifier {
         isPaid: true,
         cashToCollect: 0.0,
       );
+      if (activeTrackingOrderId == orderId) {
+        activeTrackingOrderId = null;
+      }
       syncLiveTrackingState();
       notifyListeners();
       return true;
@@ -365,6 +389,9 @@ class DeliveryOrderProvider extends ChangeNotifier {
       status: DeliveryOrderStatus.cancelled,
       cancellationReason: reason,
     );
+    if (activeTrackingOrderId == orderId) {
+      activeTrackingOrderId = null;
+    }
     syncLiveTrackingState();
     notifyListeners();
   }
@@ -397,21 +424,67 @@ class DeliveryOrderProvider extends ChangeNotifier {
   }
 
   void syncLiveTrackingState() {
-    final active = activeOrders;
-    if (active.isNotEmpty) {
-      final currentDelivering = active.firstWhere(
-        (o) =>
-            o.status == DeliveryOrderStatus.assigned ||
-            o.status == DeliveryOrderStatus.arrivedAtStore ||
-            o.status == DeliveryOrderStatus.pickedUp ||
-            o.status == DeliveryOrderStatus.arrivedAtCustomer,
-        orElse: () => active.first,
+    if (activeTrackingOrderId != null) {
+      final target = _orders.firstWhere(
+        (o) => o.id == activeTrackingOrderId,
+        orElse: () => DeliveryOrder(
+          id: '',
+          orderNumber: '',
+          customerName: '',
+          customerPhone: '',
+          deliveryAddress: '',
+          addressType: 'HOME',
+          customerLat: 0,
+          customerLng: 0,
+          storeName: '',
+          storeAddress: '',
+          storeLat: 0,
+          storeLng: 0,
+          items: [],
+          status: DeliveryOrderStatus.delivered,
+          paymentMethod: 'ONLINE',
+          isPaid: true,
+          totalAmount: 0,
+          cashToCollect: 0,
+          deliveryInstructions: '',
+          estimatedMins: '',
+          distanceStoreKm: 0,
+          distanceCustomerKm: 0,
+          customerOtp: '',
+          createdAt: DateTime.now(),
+        ),
       );
+
+      if (target.id.isNotEmpty &&
+          target.status != DeliveryOrderStatus.delivered &&
+          target.status != DeliveryOrderStatus.cancelled) {
+        LiveTrackingService().setUploadCallback(updateLocation);
+        if (!LiveTrackingService().isTracking || LiveTrackingService().activeOrderId != activeTrackingOrderId) {
+          LiveTrackingService().startTracking(orderId: activeTrackingOrderId);
+        }
+        return;
+      } else {
+        activeTrackingOrderId = null;
+      }
+    }
+
+    // Inspect orders to find any in-flight active order
+    final inFlight = _orders.where((o) =>
+        o.status == DeliveryOrderStatus.pickedUp ||
+        o.status == DeliveryOrderStatus.arrivedAtCustomer ||
+        o.status == DeliveryOrderStatus.arrivedAtStore ||
+        o.status == DeliveryOrderStatus.assigned
+    ).toList();
+
+    if (inFlight.isNotEmpty) {
+      final target = inFlight.first;
+      activeTrackingOrderId = target.id;
       LiveTrackingService().setUploadCallback(updateLocation);
-      if (!LiveTrackingService().isTracking || LiveTrackingService().activeOrderId != currentDelivering.id) {
-        LiveTrackingService().startTracking(orderId: currentDelivering.id);
+      if (!LiveTrackingService().isTracking || LiveTrackingService().activeOrderId != target.id) {
+        LiveTrackingService().startTracking(orderId: target.id);
       }
     } else {
+      activeTrackingOrderId = null;
       if (LiveTrackingService().isTracking) {
         LiveTrackingService().stopTracking();
       }

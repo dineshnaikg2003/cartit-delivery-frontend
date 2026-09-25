@@ -7,6 +7,8 @@ import '../../models/delivery_order_model.dart';
 import '../../providers/delivery_order_provider.dart';
 import '../../widgets/slide_to_action_button.dart';
 
+import '../../services/live_tracking_service.dart';
+
 class DeliveryMapScreen extends StatefulWidget {
   final DeliveryOrder order;
 
@@ -53,14 +55,19 @@ class _DeliveryMapScreenState extends State<DeliveryMapScreen>
 
     // LatLng points
     final storePoint = LatLng(currentOrder.storeLat, currentOrder.storeLng);
-    final customerPoint =
-        LatLng(currentOrder.customerLat, currentOrder.customerLng);
+    final customerPoint = LatLng(currentOrder.customerLat, currentOrder.customerLng);
 
-    // Delivery partner location
-    final partnerPoint = LatLng(
-      (currentOrder.storeLat + currentOrder.customerLat) / 2,
-      (currentOrder.storeLng + currentOrder.customerLng) / 2,
-    );
+    // Real driver position from LiveTrackingService only (NO MIDPOINT / FAKE COORDINATES)
+    final lastPos = LiveTrackingService().lastValidPosition;
+    final LatLng? driverPoint = lastPos != null
+        ? LatLng(lastPos.latitude, lastPos.longitude)
+        : null;
+
+    final polylinePoints = <LatLng>[storePoint];
+    if (driverPoint != null) {
+      polylinePoints.add(driverPoint);
+    }
+    polylinePoints.add(customerPoint);
 
     return Scaffold(
       backgroundColor: isDark ? AppColors.darkBackground : AppColors.background,
@@ -89,7 +96,7 @@ class _DeliveryMapScreenState extends State<DeliveryMapScreen>
           // FlutterMap rendering OpenStreetMap
           FlutterMap(
             options: MapOptions(
-              initialCenter: partnerPoint,
+              initialCenter: driverPoint ?? customerPoint,
               initialZoom: 14.5,
             ),
             children: [
@@ -102,7 +109,7 @@ class _DeliveryMapScreenState extends State<DeliveryMapScreen>
               PolylineLayer(
                 polylines: [
                   Polyline(
-                    points: [storePoint, partnerPoint, customerPoint],
+                    points: polylinePoints,
                     strokeWidth: 5.0,
                     color: AppColors.primary,
                   ),
@@ -126,58 +133,57 @@ class _DeliveryMapScreenState extends State<DeliveryMapScreen>
                           BoxShadow(color: Colors.black26, blurRadius: 6),
                         ],
                       ),
-                      child:
-                          const Icon(Icons.store, color: Colors.black, size: 24),
+                      child: const Icon(Icons.store, color: Colors.black, size: 24),
                     ),
                   ),
 
-                  // Animated Delivery Partner Marker with Radar Pulse
-                  Marker(
-                    point: partnerPoint,
-                    width: 64,
-                    height: 64,
-                    child: AnimatedBuilder(
-                      animation: _radarController,
-                      builder: (context, child) {
-                        return Stack(
-                          alignment: Alignment.center,
-                          children: [
-                            Container(
-                              width: 32 + (32 * _radarController.value),
-                              height: 32 + (32 * _radarController.value),
-                              decoration: BoxDecoration(
-                                shape: BoxShape.circle,
-                                color: AppColors.primary.withValues(
-                                  alpha: (1.0 - _radarController.value) * 0.4,
+                  // Real Driver Marker (rendered ONLY if trusted real GPS position exists)
+                  if (driverPoint != null)
+                    Marker(
+                      point: driverPoint,
+                      width: 64,
+                      height: 64,
+                      child: AnimatedBuilder(
+                        animation: _radarController,
+                        builder: (context, child) {
+                          return Stack(
+                            alignment: Alignment.center,
+                            children: [
+                              Container(
+                                width: 32 + (32 * _radarController.value),
+                                height: 32 + (32 * _radarController.value),
+                                decoration: BoxDecoration(
+                                  shape: BoxShape.circle,
+                                  color: AppColors.primary.withValues(
+                                    alpha: (1.0 - _radarController.value) * 0.4,
+                                  ),
                                 ),
                               ),
-                            ),
-                            Container(
-                              width: 42,
-                              height: 42,
-                              decoration: BoxDecoration(
-                                color: AppColors.primary,
-                                shape: BoxShape.circle,
-                                boxShadow: [
-                                  BoxShadow(
-                                    color: AppColors.primary
-                                        .withValues(alpha: 0.4),
-                                    blurRadius: 8,
-                                    offset: const Offset(0, 2),
-                                  ),
-                                ],
+                              Container(
+                                width: 42,
+                                height: 42,
+                                decoration: BoxDecoration(
+                                  color: AppColors.primary,
+                                  shape: BoxShape.circle,
+                                  boxShadow: [
+                                    BoxShadow(
+                                      color: AppColors.primary.withValues(alpha: 0.4),
+                                      blurRadius: 8,
+                                      offset: const Offset(0, 2),
+                                    ),
+                                  ],
+                                ),
+                                child: const Icon(
+                                  Icons.two_wheeler,
+                                  color: Colors.white,
+                                  size: 24,
+                                ),
                               ),
-                              child: const Icon(
-                                Icons.two_wheeler,
-                                color: Colors.white,
-                                size: 24,
-                              ),
-                            ),
-                          ],
-                        );
-                      },
+                            ],
+                          );
+                        },
+                      ),
                     ),
-                  ),
 
                   // Customer Destination Marker
                   Marker(
@@ -193,8 +199,7 @@ class _DeliveryMapScreenState extends State<DeliveryMapScreen>
                           BoxShadow(color: Colors.black26, blurRadius: 6),
                         ],
                       ),
-                      child: const Icon(Icons.location_on,
-                          color: Colors.white, size: 24),
+                      child: const Icon(Icons.location_on, color: Colors.white, size: 24),
                     ),
                   ),
                 ],
@@ -243,9 +248,11 @@ class _DeliveryMapScreenState extends State<DeliveryMapScreen>
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         Text(
-                          currentOrder.status == DeliveryOrderStatus.assigned
-                              ? 'Head toward ${currentOrder.storeName}'
-                              : 'Turn right in 150m onto 12th Main Rd',
+                          driverPoint != null
+                              ? (currentOrder.status == DeliveryOrderStatus.assigned
+                                  ? 'Head toward ${currentOrder.storeName}'
+                                  : 'Follow road navigation route')
+                              : 'Awaiting Real GPS Fix...',
                           style: TextStyle(
                             fontSize: 13,
                             fontWeight: FontWeight.bold,
@@ -255,10 +262,12 @@ class _DeliveryMapScreenState extends State<DeliveryMapScreen>
                           ),
                         ),
                         Text(
-                          'ETA ${currentOrder.estimatedMins} • ${currentOrder.distanceCustomerKm} km remaining',
-                          style: const TextStyle(
+                          driverPoint != null
+                              ? 'ETA ${currentOrder.estimatedMins} • ${currentOrder.distanceCustomerKm} km remaining'
+                              : 'Waiting for device GPS stream fix...',
+                          style: TextStyle(
                             fontSize: 11,
-                            color: AppColors.primary,
+                            color: driverPoint != null ? AppColors.primary : Colors.amber.shade900,
                             fontWeight: FontWeight.w600,
                           ),
                         ),

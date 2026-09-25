@@ -36,6 +36,7 @@ class LiveTrackingService {
 
   bool get isTracking => _isTracking;
   String? get activeOrderId => _activeOrderId;
+  Position? get lastValidPosition => _lastValidPosition;
 
   /// Sets the callback function used to upload location data to the backend.
   void setUploadCallback(LocationUploadCallback callback) {
