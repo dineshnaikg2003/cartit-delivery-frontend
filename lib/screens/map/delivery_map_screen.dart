@@ -1,12 +1,10 @@
 import 'package:flutter/material.dart';
-import 'package:flutter_map/flutter_map.dart';
-import 'package:latlong2/latlong.dart';
+import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:provider/provider.dart';
 import '../../app/app_colors.dart';
 import '../../models/delivery_order_model.dart';
 import '../../providers/delivery_order_provider.dart';
 import '../../widgets/slide_to_action_button.dart';
-
 import '../../services/live_tracking_service.dart';
 
 class DeliveryMapScreen extends StatefulWidget {
@@ -20,6 +18,7 @@ class DeliveryMapScreen extends StatefulWidget {
 
 class _DeliveryMapScreenState extends State<DeliveryMapScreen>
     with SingleTickerProviderStateMixin {
+  GoogleMapController? _mapController;
   late AnimationController _radarController;
 
   @override
@@ -34,6 +33,7 @@ class _DeliveryMapScreenState extends State<DeliveryMapScreen>
   @override
   void dispose() {
     _radarController.dispose();
+    _mapController?.dispose();
     super.dispose();
   }
 
@@ -41,6 +41,39 @@ class _DeliveryMapScreenState extends State<DeliveryMapScreen>
     await orderProvider.advanceOrderStatus(orderId);
     if (!mounted) return;
     Navigator.of(context).pop();
+  }
+
+  void _centerOnDriver(LatLng driverPoint) {
+    _mapController?.animateCamera(
+      CameraUpdate.newLatLngZoom(driverPoint, 16.0),
+    );
+  }
+
+  void _fitRouteBounds(LatLng store, LatLng customer, LatLng? driver) {
+    if (_mapController == null) return;
+    final points = [store, customer];
+    if (driver != null) points.add(driver);
+
+    double minLat = points.first.latitude;
+    double maxLat = points.first.latitude;
+    double minLng = points.first.longitude;
+    double maxLng = points.first.longitude;
+
+    for (final p in points) {
+      if (p.latitude < minLat) minLat = p.latitude;
+      if (p.latitude > maxLat) maxLat = p.latitude;
+      if (p.longitude < minLng) minLng = p.longitude;
+      if (p.longitude > maxLng) maxLng = p.longitude;
+    }
+
+    final bounds = LatLngBounds(
+      southwest: LatLng(minLat, minLng),
+      northeast: LatLng(maxLat, maxLng),
+    );
+
+    _mapController?.animateCamera(
+      CameraUpdate.newLatLngBounds(bounds, 70),
+    );
   }
 
   @override
@@ -53,7 +86,6 @@ class _DeliveryMapScreenState extends State<DeliveryMapScreen>
       orElse: () => widget.order,
     );
 
-    // LatLng points
     final storePoint = LatLng(currentOrder.storeLat, currentOrder.storeLng);
     final customerPoint = LatLng(currentOrder.customerLat, currentOrder.customerLng);
 
@@ -63,11 +95,63 @@ class _DeliveryMapScreenState extends State<DeliveryMapScreen>
         ? LatLng(lastPos.latitude, lastPos.longitude)
         : null;
 
+    final markers = <Marker>{
+      // Store Marker
+      Marker(
+        markerId: const MarkerId('store'),
+        position: storePoint,
+        icon: BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueOrange),
+        infoWindow: InfoWindow(
+          title: currentOrder.storeName,
+          snippet: 'Store Location',
+        ),
+      ),
+      // Customer Destination Marker
+      Marker(
+        markerId: const MarkerId('customer'),
+        position: customerPoint,
+        icon: BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueRed),
+        infoWindow: InfoWindow(
+          title: currentOrder.customerName,
+          snippet: currentOrder.deliveryAddress,
+        ),
+      ),
+    };
+
+    if (driverPoint != null) {
+      markers.add(
+        Marker(
+          markerId: const MarkerId('driver'),
+          position: driverPoint,
+          rotation: lastPos?.heading ?? 0.0,
+          icon: BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueAzure),
+          infoWindow: const InfoWindow(
+            title: 'Your Location (Delivery Partner)',
+            snippet: 'Real GPS Position',
+          ),
+        ),
+      );
+    }
+
     final polylinePoints = <LatLng>[storePoint];
     if (driverPoint != null) {
       polylinePoints.add(driverPoint);
     }
     polylinePoints.add(customerPoint);
+
+    final polylines = <Polyline>{
+      Polyline(
+        polylineId: const PolylineId('delivery_route'),
+        points: polylinePoints,
+        color: AppColors.primary,
+        width: 5,
+      ),
+    };
+
+    final initialCamera = CameraPosition(
+      target: driverPoint ?? customerPoint,
+      zoom: 14.5,
+    );
 
     return Scaffold(
       backgroundColor: isDark ? AppColors.darkBackground : AppColors.background,
@@ -90,124 +174,33 @@ class _DeliveryMapScreenState extends State<DeliveryMapScreen>
             ),
           ],
         ),
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.center_focus_strong),
+            tooltip: 'Fit Route',
+            onPressed: () => _fitRouteBounds(storePoint, customerPoint, driverPoint),
+          ),
+        ],
       ),
       body: Stack(
         children: [
-          // FlutterMap rendering OpenStreetMap
-          FlutterMap(
-            options: MapOptions(
-              initialCenter: driverPoint ?? customerPoint,
-              initialZoom: 14.5,
-            ),
-            children: [
-              TileLayer(
-                urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
-                userAgentPackageName: 'com.cartit.delivery',
-              ),
-
-              // Polyline Route Path
-              PolylineLayer(
-                polylines: [
-                  Polyline(
-                    points: polylinePoints,
-                    strokeWidth: 5.0,
-                    color: AppColors.primary,
-                  ),
-                ],
-              ),
-
-              // Map Markers
-              MarkerLayer(
-                markers: [
-                  // Store Marker
-                  Marker(
-                    point: storePoint,
-                    width: 44,
-                    height: 44,
-                    child: Container(
-                      padding: const EdgeInsets.all(6),
-                      decoration: const BoxDecoration(
-                        color: Colors.amber,
-                        shape: BoxShape.circle,
-                        boxShadow: [
-                          BoxShadow(color: Colors.black26, blurRadius: 6),
-                        ],
-                      ),
-                      child: const Icon(Icons.store, color: Colors.black, size: 24),
-                    ),
-                  ),
-
-                  // Real Driver Marker (rendered ONLY if trusted real GPS position exists)
-                  if (driverPoint != null)
-                    Marker(
-                      point: driverPoint,
-                      width: 64,
-                      height: 64,
-                      child: AnimatedBuilder(
-                        animation: _radarController,
-                        builder: (context, child) {
-                          return Stack(
-                            alignment: Alignment.center,
-                            children: [
-                              Container(
-                                width: 32 + (32 * _radarController.value),
-                                height: 32 + (32 * _radarController.value),
-                                decoration: BoxDecoration(
-                                  shape: BoxShape.circle,
-                                  color: AppColors.primary.withValues(
-                                    alpha: (1.0 - _radarController.value) * 0.4,
-                                  ),
-                                ),
-                              ),
-                              Container(
-                                width: 42,
-                                height: 42,
-                                decoration: BoxDecoration(
-                                  color: AppColors.primary,
-                                  shape: BoxShape.circle,
-                                  boxShadow: [
-                                    BoxShadow(
-                                      color: AppColors.primary.withValues(alpha: 0.4),
-                                      blurRadius: 8,
-                                      offset: const Offset(0, 2),
-                                    ),
-                                  ],
-                                ),
-                                child: const Icon(
-                                  Icons.two_wheeler,
-                                  color: Colors.white,
-                                  size: 24,
-                                ),
-                              ),
-                            ],
-                          );
-                        },
-                      ),
-                    ),
-
-                  // Customer Destination Marker
-                  Marker(
-                    point: customerPoint,
-                    width: 44,
-                    height: 44,
-                    child: Container(
-                      padding: const EdgeInsets.all(6),
-                      decoration: const BoxDecoration(
-                        color: Colors.redAccent,
-                        shape: BoxShape.circle,
-                        boxShadow: [
-                          BoxShadow(color: Colors.black26, blurRadius: 6),
-                        ],
-                      ),
-                      child: const Icon(Icons.location_on, color: Colors.white, size: 24),
-                    ),
-                  ),
-                ],
-              ),
-            ],
+          // Google Map
+          GoogleMap(
+            initialCameraPosition: initialCamera,
+            markers: markers,
+            polylines: polylines,
+            myLocationEnabled: true,
+            myLocationButtonEnabled: false,
+            zoomControlsEnabled: false,
+            compassEnabled: true,
+            mapToolbarEnabled: false,
+            onMapCreated: (controller) {
+              _mapController = controller;
+              _fitRouteBounds(storePoint, customerPoint, driverPoint);
+            },
           ),
 
-          // Top Navigation Turn-by-Turn Maneuver Header
+          // Top Turn-by-Turn Header / GPS Status
           Positioned(
             left: 14,
             right: 14,
@@ -236,9 +229,9 @@ class _DeliveryMapScreenState extends State<DeliveryMapScreen>
                       color: AppColors.primary.withValues(alpha: 0.15),
                       shape: BoxShape.circle,
                     ),
-                    child: const Icon(
-                      Icons.turn_right_rounded,
-                      color: AppColors.primary,
+                    child: Icon(
+                      driverPoint != null ? Icons.turn_right_rounded : Icons.gps_off_rounded,
+                      color: driverPoint != null ? AppColors.primary : Colors.amber.shade900,
                       size: 24,
                     ),
                   ),
@@ -252,7 +245,7 @@ class _DeliveryMapScreenState extends State<DeliveryMapScreen>
                               ? (currentOrder.status == DeliveryOrderStatus.assigned
                                   ? 'Head toward ${currentOrder.storeName}'
                                   : 'Follow road navigation route')
-                              : 'Awaiting Real GPS Fix...',
+                              : 'Waiting for GPS...',
                           style: TextStyle(
                             fontSize: 13,
                             fontWeight: FontWeight.bold,
@@ -264,7 +257,7 @@ class _DeliveryMapScreenState extends State<DeliveryMapScreen>
                         Text(
                           driverPoint != null
                               ? 'ETA ${currentOrder.estimatedMins} • ${currentOrder.distanceCustomerKm} km remaining'
-                              : 'Waiting for device GPS stream fix...',
+                              : 'Acquiring real-time device location stream...',
                           style: TextStyle(
                             fontSize: 11,
                             color: driverPoint != null ? AppColors.primary : Colors.amber.shade900,
@@ -279,7 +272,21 @@ class _DeliveryMapScreenState extends State<DeliveryMapScreen>
             ),
           ),
 
-          // Bottom Route Details Floating Drawer Card
+          // Center on Driver Floating Action Button
+          if (driverPoint != null)
+            Positioned(
+              right: 16,
+              bottom: 250,
+              child: FloatingActionButton.small(
+                heroTag: 'center_driver',
+                backgroundColor: isDark ? AppColors.darkSurface : AppColors.surface,
+                foregroundColor: AppColors.primary,
+                onPressed: () => _centerOnDriver(driverPoint),
+                child: const Icon(Icons.my_location),
+              ),
+            ),
+
+          // Bottom Route Details Floating Card
           Positioned(
             left: 14,
             right: 14,
@@ -365,11 +372,11 @@ class _DeliveryMapScreenState extends State<DeliveryMapScreen>
                               const SnackBar(
                                 content: Text(
                                     'Launching external Google Maps Navigation...'),
-                              ),
+                                ),
                             );
                           },
                           icon: const Icon(Icons.navigation, size: 16),
-                          label: const Text('Maps GPS'),
+                          label: const Text('Google Maps'),
                           style: OutlinedButton.styleFrom(
                             foregroundColor: AppColors.primary,
                             side: const BorderSide(color: AppColors.primary),
